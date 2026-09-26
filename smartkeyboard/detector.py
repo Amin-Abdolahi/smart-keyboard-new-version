@@ -7,28 +7,45 @@ from .languages import get_language_info
 
 
 # --- آستانه‌ها ---
-AUTO_CONVERT_THRESHOLD = 0.75
-SUGGEST_THRESHOLD = 0.40
+AUTO_CONVERT_THRESHOLD = 0.70
+SUGGEST_THRESHOLD = 0.30
 MIN_WORD_LENGTH = 2
 
+# --- وزن‌های امتیازدهی ---
+W_WORD = 0.30   # امتیاز کلمه‌ای
+W_CHAR = 0.20   # امتیاز حرفی
+W_STAT = 0.50   # امتیاز آماری
 
-# --- حروف پرکاربرد فارسی (بر اساس فراوانی) ---
+
+# --- حروف پرکاربرد فارسی ---
 FA_COMMON_CHARS = set("ایردنتسهبمفکعلحوقپجشخزضغذثقظط")
 
 # --- حروف پرکاربرد انگلیسی ---
 EN_COMMON_CHARS = set("etaoinshrdlucmfwypvbgkjqxz")
 
+
 # --- بی‌گرام‌های رایج فارسی ---
 FA_BIGRAMS = {
     "ان", "را", "ها", "یه", "می", "ای", "او", "یی", "ست", "که",
     "از", "با", "در", "بر", "تا", "هم", "یا", "ما", "تو", "شو",
-    "ین", "ون", "ار", "ور", "رد", "دی", "با", "به", "بی", "پی",
+    "ین", "ون", "ار", "ور", "رد", "دی", "به", "بی", "پی",
+    "اب", "اد", "اس", "اش", "اص", "اط", "اع", "اف", "اق", "ال",
+    "ام", "اه", "اند", "انی", "اول", "اید", "این", "بد", "بعد",
+    "بعض", "بود", "بین", "پس", "پیش", "توی", "جان", "جای",
+    "چند", "چون", "حال", "حتی", "حق", "خوب", "خود", "دار",
+    "داشت", "دان", "دست", "دل", "دو", "روز", "روی", "ریز",
+    "زیر", "سال", "سری", "شان", "شد", "شده", "شکل", "شور",
+    "صور", "طور", "طول", "کار", "کش", "کم", "کن", "کیف",
+    "گفت", "گون", "گیر", "مان", "مثل", "مر", "مرد", "مق",
+    "مل", "مو", "نار", "نام", "نتر", "ند", "نظر", "نمی",
+    "نه", "نور", "نیز", "های", "هر", "هست", "هم", "هیچ",
+    "یاب", "یافت", "یک", "یکی",
 }
 
 # --- بی‌گرام‌های رایج انگلیسی ---
 EN_BIGRAMS = {
-    "th", "he", "in", "er", "an", "re", "on", "at", "en", "nd",
-    "ti", "es", "or", "te", "of", "ed", "is", "it", "al", "ar",
+    "th", "he", "in", "er", "an", "re", "on", "at", "en",
+    "es", "or", "te", "of", "ed", "is", "it", "al", "ar",
     "st", "to", "nt", "ng", "se", "ha", "as", "ou", "io", "le",
 }
 
@@ -73,9 +90,7 @@ def _char_ratio(text, lang):
 
 
 def _statistical_score(text, lang):
-    """
-    امتیاز آماری بر اساس فراوانی حروف و بی‌گرام‌ها.
-    """
+    """امتیاز آماری بر اساس فراوانی حروف و بی‌گرام‌ها."""
     if not text:
         return 0.0
 
@@ -142,39 +157,33 @@ def _score_conversion(original, converted, dictionary, from_lang, to_lang):
     """
     امتیازدهی به یه تبدیل.
     ترکیبی از:
-      - امتیاز کلمه‌ای (۴۰٪)
-      - امتیاز حرفی (۳۰٪)
-      - امتیاز آماری (۳۰٪)
+      - امتیاز کلمه‌ای (۳۰٪)
+      - امتیاز حرفی (۲۰٪)
+      - امتیاز آماری (۵۰٪)
     """
-    # کلمات شناخته‌شده
     orig_known, orig_total = _count_known_words(original, dictionary, from_lang)
     conv_known, conv_total = _count_known_words(converted, dictionary, to_lang)
 
-    # نسبت حروف
     orig_char_ratio = _char_ratio(original, from_lang)
     conv_char_ratio = _char_ratio(converted, to_lang)
 
-    # امتیاز آماری
     orig_stat = _statistical_score(original, from_lang)
     conv_stat = _statistical_score(converted, to_lang)
 
-    # امتیاز کلمه‌ای
     orig_word_score = orig_known / orig_total if orig_total > 0 else 0.0
     conv_word_score = conv_known / conv_total if conv_total > 0 else 0.0
 
-    # ترکیب نهایی
     orig_score = (
-        (orig_word_score * 0.4)
-        + (orig_char_ratio * 0.3)
-        + (orig_stat * 0.3)
+        (orig_word_score * W_WORD)
+        + (orig_char_ratio * W_CHAR)
+        + (orig_stat * W_STAT)
     )
     conv_score = (
-        (conv_word_score * 0.4)
-        + (conv_char_ratio * 0.3)
-        + (conv_stat * 0.3)
+        (conv_word_score * W_WORD)
+        + (conv_char_ratio * W_CHAR)
+        + (conv_stat * W_STAT)
     )
 
-    # اطمینان
     if conv_score > orig_score:
         confidence = conv_score - (orig_score * 0.5)
     else:
@@ -267,6 +276,7 @@ if __name__ == "__main__":
         ('asdfgh', 'en', ['fa', 'en']),
         ('AI', 'fa', ['fa', 'en']),
         ('man', 'en', ['fa', 'en']),
+        ('o,fd ]i ofv', 'en', ['fa', 'en']),
     ]
 
     for text, lang, langs in tests:
