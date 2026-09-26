@@ -1,9 +1,7 @@
 # smartkeyboard/tray.py
 # آیکون system tray
 
-import os
 import threading
-from pathlib import Path
 
 from PIL import Image, ImageDraw
 from pystray import Icon, MenuItem, Menu
@@ -20,7 +18,6 @@ def create_icon_image(color, size=64):
     """ساخت یه آیکون ساده با یه رنگ خاص."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    # دایره پر
     margin = 6
     draw.ellipse(
         [margin, margin, size - margin, size - margin],
@@ -28,7 +25,6 @@ def create_icon_image(color, size=64):
         outline=(255, 255, 255, 200),
         width=2,
     )
-    # یه حرف K توش
     try:
         from PIL import ImageFont
         font = ImageFont.truetype("segoeui.ttf", size // 2)
@@ -51,7 +47,6 @@ class TrayIcon:
         self._thread = None
         self._current_color = COLOR_IDLE
         self._status_text = "غیرفعال"
-
         self.icon_image = create_icon_image(COLOR_IDLE)
 
     def _build_menu(self):
@@ -85,8 +80,16 @@ class TrayIcon:
         self.set_status("غیرفعال", COLOR_IDLE)
 
     def _on_settings(self, icon=None, item=None):
-        print("[Tray] تنظیمات (به زودی)")
-        # TODO: باز کردن پنجره تنظیمات
+        print("[Tray] باز کردن تنظیمات...")
+        try:
+            from .settings_ui import open_settings
+            open_settings(on_save=self._on_settings_saved)
+        except Exception as e:
+            print(f"[Tray] خطا در باز کردن تنظیمات: {e}")
+
+    def _on_settings_saved(self):
+        """وقتی کاربر تنظیمات رو ذخیره کرد."""
+        print("[Tray] تنظیمات ذخیره شد.")
 
     def _on_stats(self, icon=None, item=None):
         print("[Tray] آمار:")
@@ -116,7 +119,6 @@ class TrayIcon:
             except Exception as e:
                 print(f"[Tray] خطا در تغییر آیکون: {e}")
 
-        # به‌روزرسانی منو
         try:
             if self.icon:
                 self.icon.update_menu()
@@ -151,8 +153,6 @@ class TrayIcon:
 
 
 if __name__ == "__main__":
-    print("تست tray (آیکون کنار ساعت ویندوز ظاهر میشه)...")
-    print("روی آیکون راست‌کلیک کن و 'خروج' رو بزن تا بسته بشه.")
-
+    print("تست tray...")
     tray = TrayIcon()
     tray.run()
