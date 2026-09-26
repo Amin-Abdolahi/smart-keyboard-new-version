@@ -7,8 +7,8 @@ from .languages import get_language_info
 
 
 # --- آستانه‌ها ---
-AUTO_CONVERT_THRESHOLD = 0.9
-SUGGEST_THRESHOLD = 0.5
+AUTO_CONVERT_THRESHOLD = 0.8
+SUGGEST_THRESHOLD = 0.4
 MIN_WORD_LENGTH = 2
 
 
