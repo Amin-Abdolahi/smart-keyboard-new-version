@@ -31,17 +31,14 @@ class SettingsWindow:
         self._vars = {}
 
     def _create_window(self):
-        """ساخت پنجره."""
         self.root = tk.Tk()
         self.root.title("تنظیمات Smart Keyboard")
-        self.root.geometry("600x650")
+        self.root.geometry("600x700")
         self.root.configure(bg=BG)
         self.root.resizable(False, False)
 
-        # راست‌چین کردن پنجره
         self.root.bind("<Escape>", lambda e: self.root.destroy())
 
-        # --- Notebook (تب‌ها) ---
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("TNotebook", background=BG, borderwidth=0)
@@ -50,19 +47,11 @@ class SettingsWindow:
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # تب ۱: زبان‌ها
         self._build_languages_tab(notebook)
-
-        # تب ۲: تبدیل
         self._build_conversion_tab(notebook)
-
-        # تب ۳: رابط کاربری
         self._build_ui_tab(notebook)
-
-        # تب ۴: دیکشنری
         self._build_dictionary_tab(notebook)
 
-        # --- دکمه‌های پایین ---
         btn_frame = tk.Frame(self.root, bg=BG)
         btn_frame.pack(fill="x", padx=10, pady=(0, 10))
 
@@ -86,7 +75,6 @@ class SettingsWindow:
         frame = tk.Frame(notebook, bg=BG)
         notebook.add(frame, text="زبان‌ها")
 
-        # زبان‌های فعال
         tk.Label(
             frame, text="زبان‌های فعال:", bg=BG, fg=FG,
             font=("Segoe UI", 10, "bold")
@@ -107,7 +95,6 @@ class SettingsWindow:
             )
             cb.pack(anchor="e", pady=2)
 
-        # زبان اصلی
         tk.Label(
             frame, text="زبان اصلی:", bg=BG, fg=FG,
             font=("Segoe UI", 10, "bold")
@@ -136,23 +123,20 @@ class SettingsWindow:
         frame = tk.Frame(notebook, bg=BG)
         notebook.add(frame, text="تبدیل")
 
-        # آستانه تبدیل خودکار
         self._add_slider(
             frame, "آستانه تبدیل خودکار:",
             "auto_threshold",
-            self.config.get("conversion", "auto_convert_threshold", default=0.9),
+            self.config.get("conversion", "auto_convert_threshold", default=0.75),
             0.5, 1.0, 0.05
         )
 
-        # آستانه پیشنهاد
         self._add_slider(
             frame, "آستانه نمایش پیشنهاد:",
             "suggest_threshold",
-            self.config.get("conversion", "suggest_threshold", default=0.5),
+            self.config.get("conversion", "suggest_threshold", default=0.30),
             0.1, 0.9, 0.05
         )
 
-        # زمان توقف
         self._add_slider(
             frame, "زمان توقف قبل از بررسی (ثانیه):",
             "pause_seconds",
@@ -160,7 +144,6 @@ class SettingsWindow:
             0.3, 3.0, 0.1
         )
 
-        # cooldown
         self._add_slider(
             frame, "فاصله بین پیشنهادها (ثانیه):",
             "cooldown_seconds",
@@ -168,7 +151,6 @@ class SettingsWindow:
             0.5, 10.0, 0.5
         )
 
-        # جایگزینی خودکار
         auto_var = tk.BooleanVar(
             value=self.config.get("conversion", "auto_replace", default=True)
         )
@@ -179,13 +161,23 @@ class SettingsWindow:
             anchor="e", justify="right"
         ).pack(anchor="e", padx=20, pady=10)
 
+        # ← قابلیت جدید: تغییر خودکار layout
+        switch_var = tk.BooleanVar(
+            value=self.config.get("conversion", "auto_switch_layout", default=False)
+        )
+        self._vars["auto_switch_layout"] = switch_var
+        tk.Checkbutton(
+            frame, text="تغییر خودکار layout بعد از تبدیل",
+            variable=switch_var, bg=BG, fg=FG, font=("Segoe UI", 10),
+            anchor="e", justify="right"
+        ).pack(anchor="e", padx=20, pady=10)
+
     # --- تب رابط کاربری ---
 
     def _build_ui_tab(self, notebook):
         frame = tk.Frame(notebook, bg=BG)
         notebook.add(frame, text="رابط کاربری")
 
-        # حباب شناور
         bubble_var = tk.BooleanVar(
             value=self.config.get("ui", "bubble_enabled", default=True)
         )
@@ -196,7 +188,6 @@ class SettingsWindow:
             anchor="e", justify="right"
         ).pack(anchor="e", padx=20, pady=10)
 
-        # صدا
         sound_var = tk.BooleanVar(
             value=self.config.get("ui", "sound_enabled", default=True)
         )
@@ -207,7 +198,6 @@ class SettingsWindow:
             anchor="e", justify="right"
         ).pack(anchor="e", padx=20, pady=10)
 
-        # timeout حباب
         self._add_slider(
             frame, "زمان بسته شدن خودکار حباب (ثانیه):",
             "bubble_timeout",
@@ -252,7 +242,6 @@ class SettingsWindow:
                 font=("Segoe UI", 10, "bold"), anchor="w"
             ).pack(side="left")
 
-        # دکمه پاک کردن لاگ
         clear_btn = tk.Button(
             frame, text="پاک کردن لاگ تبدیل‌ها",
             command=self._clear_log,
@@ -264,7 +253,6 @@ class SettingsWindow:
     # --- کمکی ---
 
     def _add_slider(self, parent, label, key, value, from_, to, step):
-        """اضافه کردن یه اسلایدر."""
         frame = tk.Frame(parent, bg=BG)
         frame.pack(fill="x", padx=20, pady=10)
 
@@ -295,13 +283,11 @@ class SettingsWindow:
         scale.pack(fill="x")
 
     def _clear_log(self):
-        """پاک کردن لاگ."""
         if messagebox.askyesno("تایید", "لاگ تبدیل‌ها پاک بشه؟"):
             self.learner.clear_log()
             messagebox.showinfo("انجام شد", "لاگ پاک شد.")
 
     def _on_save(self):
-        """ذخیره تنظیمات."""
         # زبان‌های فعال
         active = [code for code in LANGUAGES if self._vars[f"lang_{code}"].get()]
         if not active:
@@ -309,7 +295,6 @@ class SettingsWindow:
             return
         self.config.set("languages", "active", value=active)
 
-        # زبان اصلی
         self.config.set("languages", "primary",
                         value=self._vars["primary_lang"].get())
 
@@ -324,6 +309,8 @@ class SettingsWindow:
                         value=self._vars["cooldown_seconds"].get())
         self.config.set("conversion", "auto_replace",
                         value=self._vars["auto_replace"].get())
+        self.config.set("conversion", "auto_switch_layout",
+                        value=self._vars["auto_switch_layout"].get())
 
         # UI
         self.config.set("ui", "bubble_enabled",
@@ -340,7 +327,6 @@ class SettingsWindow:
         self.root.destroy()
 
     def show(self):
-        """نمایش پنجره."""
         def run():
             self._create_window()
             self.root.mainloop()
@@ -350,7 +336,6 @@ class SettingsWindow:
 
 
 def open_settings(on_save=None):
-    """باز کردن پنجره تنظیمات."""
     w = SettingsWindow(on_save=on_save)
     w.show()
 

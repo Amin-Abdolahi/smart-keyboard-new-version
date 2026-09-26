@@ -7,7 +7,6 @@ import time
 import threading
 import platform
 
-# اضافه کردن مسیر پروژه به sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from smartkeyboard.config import get_config
@@ -26,6 +25,7 @@ if platform.system() == "Windows":
         import win32gui
         import win32api
         import win32process
+        import win32con
         PYWIN_AVAILABLE = True
     except ImportError as e:
         print(f"[Warning] pywin32 پیدا نشد: {e}")
@@ -39,7 +39,6 @@ SCANCODE_TO_CHAR = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
 }
 
-# --- نقشه scan code علائم نگارشی ---
 SCANCODE_PUNCTUATION = {
     26: '[', 27: ']', 43: '\\',
     39: ';', 40: "'",
@@ -48,8 +47,17 @@ SCANCODE_PUNCTUATION = {
     41: '`',
 }
 
-# زمان انتظار برای یادگیری پس‌زمینه (ثانیه)
 BACKGROUND_LEARN_DELAY = 5.0
+MAX_TEXT_LENGTH = 300
+
+
+# --- نقشه زبان‌ها به Windows Lang ID ---
+LANG_IDS = {
+    "fa": 0x0429,
+    "en": 0x0409,
+    "de": 0x0407,
+    "ar": 0x0401,
+}
 
 
 def get_current_layout():
@@ -61,15 +69,47 @@ def get_current_layout():
         thread_id = win32process.GetWindowThreadProcessId(hwnd)[0]
         layout_id = win32api.GetKeyboardLayout(thread_id)
         lang_id = layout_id & 0xFFFF
-        if lang_id == 0x0429:
-            return "fa"
-        elif lang_id == 0x0409:
-            return "en"
-        elif lang_id == 0x0407:
-            return "de"
+        for code, lid in LANG_IDS.items():
+            if lang_id == lid:
+                return code
         return "en"
     except Exception:
         return "en"
+
+
+def switch_keyboard_layout(lang_code):
+    """تغییر layout کیبورد به زبان مشخص."""
+    if not PYWIN_AVAILABLE:
+        return False
+
+    try:
+        layouts = win32api.GetKeyboardLayoutList()
+        target_lang_id = LANG_IDS.get(lang_code)
+        if target_lang_id is None:
+            return False
+
+        target_hkl = None
+        for hkl in layouts:
+            if (hkl & 0xFFFF) == target_lang_id:
+                target_hkl = hkl
+                break
+
+        if not target_hkl:
+            print(f"[Layout] زبان {lang_code} نصب نیست.")
+            return False
+
+        hwnd = win32gui.GetForegroundWindow()
+        win32api.SendMessage(
+            hwnd,
+            win32con.WM_INPUTLANGCHANGEREQUEST,
+            0,
+            target_hkl
+        )
+        print(f"[Layout] تغییر به {lang_code}")
+        return True
+    except Exception as e:
+        print(f"[Layout Error] {e}")
+        return False
 
 
 class SmartKeyboardApp:
@@ -87,26 +127,23 @@ class SmartKeyboardApp:
         self._lock = threading.Lock()
         self._last_conversion_time = 0
 
-        # --- برای یادگیری پس‌زمینه ---
-        self._pending_learn_text = ""       # متنی که ممکنه یاد گرفته بشه
-        self._pending_learn_lang = "en"     # زبان متن
-        self._pending_learn_timer = None    # تایمر یادگیری
-        self._last_hwnd = None              # هندل پنجره قبلی
+        self._pending_learn_text = ""
+        self._pending_learn_lang = "en"
+        self._pending_learn_timer = None
+        self._last_hwnd = None
 
-        # حباب شناور
         self.popup = PopupBubble(
             on_accept=self._on_popup_accept,
             on_reject=self._on_popup_reject,
             on_learn=self._on_popup_learn,
         )
 
-        # آیکون tray
         self.tray = TrayIcon(app=self)
 
-        # خواندن تنظیمات
         self.pause_seconds = self.config.get("conversion", "pause_seconds", default=1.0)
         self.cooldown_seconds = self.config.get("conversion", "cooldown_seconds", default=2.0)
         self.auto_replace = self.config.get("conversion", "auto_replace", default=True)
+        self.auto_switch_layout = self.config.get("conversion", "auto_switch_layout", default=False)
         self.sound_enabled = self.config.get("ui", "sound_enabled", default=True)
 
         self.active_langs = self.config.get("languages", "active", default=["fa", "en"])
@@ -114,7 +151,6 @@ class SmartKeyboardApp:
     # --- مدیریت کیبورد ---
 
     def _on_key_event(self, event):
-        """مدیریت رویدادهای کیبورد."""
         if not self.is_monitoring:
             return
 
@@ -125,42 +161,35 @@ class SmartKeyboardApp:
             name = event.name
             scan = event.scan_code
 
-            # --- کلید میانبر دستی: Ctrl+Shift+F ---
             if name == 'f' and self._is_hotkey_pressed():
                 self._force_convert_buffer()
                 return
 
-            # هر کلیدی که زده شد، تایمر یادگیری رو کنسل کن
             self._cancel_pending_learn()
 
-            # حروف و اعداد
             if scan in SCANCODE_TO_CHAR:
                 char = SCANCODE_TO_CHAR[scan]
                 with self._lock:
                     self._input_buffer += char
                 self._reset_pause_timer()
 
-            # علائم نگارشی
             elif scan in SCANCODE_PUNCTUATION:
                 char = SCANCODE_PUNCTUATION[scan]
                 with self._lock:
                     self._input_buffer += char
                 self._reset_pause_timer()
 
-            # space
             elif name == 'space':
                 with self._lock:
                     self._input_buffer += ' '
                 self._reset_pause_timer()
 
-            # backspace
             elif name == 'backspace':
                 with self._lock:
                     if self._input_buffer:
                         self._input_buffer = self._input_buffer[:-1]
                 self._reset_pause_timer()
 
-            # enter و tab → بررسی فوری
             elif name in ('enter', 'tab'):
                 self._process_buffer()
 
@@ -168,7 +197,6 @@ class SmartKeyboardApp:
             print(f"[Key Error] {e}")
 
     def _reset_pause_timer(self):
-        """ریست کردن تایمر توقف."""
         if self._pause_timer:
             self._pause_timer.cancel()
         self._pause_timer = threading.Timer(self.pause_seconds, self._process_buffer)
@@ -176,7 +204,6 @@ class SmartKeyboardApp:
         self._pause_timer.start()
 
     def _process_buffer(self):
-        """بررسی متن جمع‌شده و تبدیل در صورت نیاز."""
         with self._lock:
             raw = self._input_buffer
             self._input_buffer = ""
@@ -185,7 +212,10 @@ class SmartKeyboardApp:
         if not text:
             return
 
-        # cooldown
+        if len(text) > MAX_TEXT_LENGTH:
+            print(f"[Main] متن طولانی ({len(text)} کاراکتر)، نادیده گرفته میشه.")
+            return
+
         now = time.time()
         if now - self._last_conversion_time < self.cooldown_seconds:
             return
@@ -194,24 +224,26 @@ class SmartKeyboardApp:
         result = detect(text, current_lang, self.active_langs, self.dictionary)
 
         if result.action == 'keep':
-            # متن معنی‌داره یا whitelist هست → برای یادگیری پس‌زمینه ذخیره کن
             self._schedule_pending_learn(text, current_lang)
             return
 
         print(f"[Detect] {result}")
 
         if result.action == 'auto' and self.auto_replace:
-            # ذخیره هندل پنجره فعلی
             self._save_foreground_window()
-            # متن توی صفحه = raw (با space و علائم)
             self._do_replace(raw, result.suggested)
             self.learner.on_accept(result.original, result.suggested,
                                    result.from_lang, result.to_lang, result.confidence)
+
+            # تغییر خودکار layout
+            if self.auto_switch_layout:
+                time.sleep(0.2)
+                switch_keyboard_layout(result.to_lang)
+
             self._last_conversion_time = now
             self.tray.set_status("فعال", COLOR_ACTIVE)
 
         elif result.action == 'suggest':
-            # ذخیره هندل پنجره فعلی
             self._save_foreground_window()
             if self.sound_enabled:
                 play_ding()
@@ -222,10 +254,6 @@ class SmartKeyboardApp:
     # --- یادگیری پس‌زمینه ---
 
     def _schedule_pending_learn(self, text, lang):
-        """
-        برنامه‌ریزی برای یادگیری متن بعد از چند ثانیه.
-        اگه کاربر متن رو تغییر نده یا backspace نزنه، متن یاد گرفته میشه.
-        """
         if not self.config.get("learning", "enabled", default=True):
             return
         if len(text) < 3:
@@ -234,11 +262,9 @@ class SmartKeyboardApp:
         self._pending_learn_text = text
         self._pending_learn_lang = lang
 
-        # کنسل تایمر قبلی
         if self._pending_learn_timer:
             self._pending_learn_timer.cancel()
 
-        # تایمر جدید
         self._pending_learn_timer = threading.Timer(
             BACKGROUND_LEARN_DELAY, self._do_pending_learn
         )
@@ -246,13 +272,11 @@ class SmartKeyboardApp:
         self._pending_learn_timer.start()
 
     def _cancel_pending_learn(self):
-        """کنسل کردن یادگیری پس‌زمینه (وقتی کاربر داره تایپ میکنه)."""
         if self._pending_learn_timer:
             self._pending_learn_timer.cancel()
             self._pending_learn_timer = None
 
     def _do_pending_learn(self):
-        """یادگیری واقعی متن بعد از تاخیر."""
         text = self._pending_learn_text
         lang = self._pending_learn_lang
         self._pending_learn_text = ""
@@ -260,7 +284,6 @@ class SmartKeyboardApp:
         if not text:
             return
 
-        # اضافه کردن کلمات به لیست کاربر
         count = self.dictionary.add_sentence_words(text, lang=lang)
         if count > 0:
             print(f"[Learn] {count} کلمه از '{text[:50]}...' یاد گرفته شد.")
@@ -268,7 +291,6 @@ class SmartKeyboardApp:
     # --- ذخیره/بازیابی پنجره ---
 
     def _save_foreground_window(self):
-        """ذخیره هندل پنجره فعال."""
         if not PYWIN_AVAILABLE:
             return
         try:
@@ -277,7 +299,6 @@ class SmartKeyboardApp:
             self._last_hwnd = None
 
     def _restore_foreground_window(self):
-        """برگرداندن focus به پنجره قبلی."""
         if not PYWIN_AVAILABLE or not self._last_hwnd:
             return
         try:
@@ -288,53 +309,77 @@ class SmartKeyboardApp:
     # --- جایگزینی متن ---
 
     def _do_replace(self, old_text, new_text):
-        """جایگزینی متن تایپ‌شده با متن جدید."""
         try:
             import keyboard as kb
+            old_text = old_text.rstrip()
+            time.sleep(0.1)
+
             backspace_count = len(old_text)
-            for _ in range(backspace_count):
+            for i in range(backspace_count):
                 kb.send('backspace')
-                time.sleep(0.005)
-            kb.write(new_text, delay=0.005)
+                time.sleep(0.015)
+
+            time.sleep(0.1)
+            kb.write(new_text, delay=0.02)
+
         except Exception as e:
             print(f"[Replace Error] {e}")
 
     # --- Handlerهای حباب ---
 
     def _on_popup_accept(self, original, suggested):
-        """کاربر پیشنهاد رو قبول کرد."""
         print(f"[Popup] قبول: '{original}' -> '{suggested}'")
 
-        # صبر کن پاپ‌آپ بسته بشه
         time.sleep(0.3)
-
-        # برگرداندن focus به پنجره قبلی
         self._restore_foreground_window()
-        time.sleep(0.1)
+        time.sleep(0.15)
 
+        original = original.rstrip()
         self._do_replace(original, suggested)
         self.learner.on_accept(original, suggested, "", "", 1.0)
+
+        # تغییر خودکار layout
+        if self.auto_switch_layout:
+            time.sleep(0.2)
+            # زبان مقصد رو از روی متن پیشنهادی تشخیص بده
+            if any('\u0600' <= c <= '\u06FF' for c in suggested):
+                switch_keyboard_layout("fa")
+            else:
+                switch_keyboard_layout("en")
+
         self._last_conversion_time = time.time()
         self.tray.set_status("فعال", COLOR_ACTIVE)
 
     def _on_popup_reject(self, original, suggested):
-        """کاربر پیشنهاد رو رد کرد."""
         print(f"[Popup] رد: '{original}' -> '{suggested}'")
         self.learner.on_reject(original, suggested, "", "", 0.0)
         self.tray.set_status("فعال", COLOR_ACTIVE)
 
     def _on_popup_learn(self, word):
-        """کاربر کلمه رو یاد داد."""
         print(f"[Popup] یاد بگیر: '{word}'")
         self.learner.on_learn(word)
-        # همچنین کلمات جمله رو هم اضافه کن
         self.dictionary.add_sentence_words(word, lang="fa")
+
+        time.sleep(0.3)
+        self._restore_foreground_window()
+        time.sleep(0.15)
+
+        original = self.popup.current_original.rstrip()
+        self._do_replace(original, word)
+
+        if self.auto_switch_layout:
+            time.sleep(0.2)
+            if any('\u0600' <= c <= '\u06FF' for c in word):
+                switch_keyboard_layout("fa")
+            else:
+                switch_keyboard_layout("en")
+
+        self._last_conversion_time = time.time()
         self.tray.set_status("فعال", COLOR_ACTIVE)
 
     # --- شروع/توقف ---
 
     def start_monitoring(self):
-        """شروع نظارت روی کیبورد."""
         if self.is_monitoring:
             return
         try:
@@ -346,7 +391,6 @@ class SmartKeyboardApp:
             print(f"[Main] خطا در شروع نظارت: {e}")
 
     def stop_monitoring(self):
-        """توقف نظارت."""
         if not self.is_monitoring:
             return
         try:
@@ -366,7 +410,6 @@ class SmartKeyboardApp:
     # --- کلید میانبر دستی ---
 
     def _is_hotkey_pressed(self):
-        """چک کن آیا Ctrl+Shift+F فشرده شده."""
         try:
             import keyboard as kb
             return kb.is_pressed('ctrl') and kb.is_pressed('shift')
@@ -374,7 +417,6 @@ class SmartKeyboardApp:
             return False
 
     def _force_convert_buffer(self):
-        """تبدیل اجباری متن تایپ‌شده (بدون تشخیص خودکار)."""
         with self._lock:
             raw = self._input_buffer
             self._input_buffer = ""
@@ -391,30 +433,27 @@ class SmartKeyboardApp:
                     print(f"[Force Convert] '{text}' -> '{converted}'")
                     self._save_foreground_window()
                     self._do_replace(raw, converted)
+
+                    if self.auto_switch_layout:
+                        time.sleep(0.2)
+                        switch_keyboard_layout(target)
                     return
 
     # --- اجرا ---
 
     def run(self):
-        """اجرای برنامه."""
         print("=" * 50)
         print("Smart Keyboard v2")
         print("=" * 50)
 
-        # شروع آیکون tray توی ترد جدا
         self.tray.run_detached()
-
-        # صبر کن tray بالا بیاد
         time.sleep(0.5)
-
-        # شروع نظارت
         self.start_monitoring()
 
         print("\nبرنامه در حال اجراست.")
         print("راست‌کلیک روی آیکون tray برای گزینه‌ها.")
         print("برای خروج: Ctrl+C\n")
 
-        # حلقه اصلی
         try:
             while True:
                 time.sleep(1)

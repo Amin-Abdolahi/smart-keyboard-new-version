@@ -11,17 +11,13 @@ import platform
 BG_COLOR = "#2b2b2b"
 FG_COLOR = "#ffffff"
 ACCENT_COLOR = "#4a9eff"
-BTN_BG = "#3c3c3c"
-BTN_HOVER = "#505050"
 BTN_ACCEPT = "#4a9eff"
 BTN_REJECT = "#666666"
 BTN_LEARN = "#6b9e3f"
 
 
 class PopupBubble:
-    """
-    حباب شناور برای نمایش پیشنهاد.
-    """
+    """حباب شناور برای نمایش پیشنهاد."""
 
     def __init__(self, on_accept=None, on_reject=None, on_learn=None):
         self.on_accept = on_accept
@@ -33,6 +29,7 @@ class PopupBubble:
         self.current_suggested = ""
         self._close_timer = None
         self._is_visible = False
+        self._lock = threading.Lock()
 
     def _create_window(self, original, suggested):
         """ساخت پنجره Tkinter."""
@@ -42,11 +39,11 @@ class PopupBubble:
         self.root.attributes("-topmost", True)
         self.root.configure(bg=BG_COLOR)
 
-        # موقعیت: گوشه پایین راست صفحه
+        # موقعیت: گوشه پایین راست
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        win_w = 420
-        win_h = 180
+        win_w = 480
+        win_h = 200
         x = screen_w - win_w - 30
         y = screen_h - win_h - 60
         self.root.geometry(f"{win_w}x{win_h}+{x}+{y}")
@@ -88,7 +85,7 @@ class PopupBubble:
             font=text_font,
             bg=BG_COLOR,
             fg=FG_COLOR,
-            wraplength=380,
+            wraplength=440,
             justify="right",
             anchor="e",
         )
@@ -98,7 +95,6 @@ class PopupBubble:
         btn_frame = tk.Frame(self.root, bg=BG_COLOR)
         btn_frame.pack(fill="x", padx=12, pady=(4, 10))
 
-        # دکمه جایگزین
         accept_btn = tk.Label(
             btn_frame, text="✓ جایگزین", font=btn_font,
             bg=BTN_ACCEPT, fg="white", padx=12, pady=5, cursor="hand2"
@@ -106,7 +102,6 @@ class PopupBubble:
         accept_btn.pack(side="right", padx=(4, 0))
         accept_btn.bind("<Button-1>", lambda e: self._on_accept())
 
-        # دکمه رد
         reject_btn = tk.Label(
             btn_frame, text="✕ رد", font=btn_font,
             bg=BTN_REJECT, fg="white", padx=12, pady=5, cursor="hand2"
@@ -114,7 +109,6 @@ class PopupBubble:
         reject_btn.pack(side="right", padx=4)
         reject_btn.bind("<Button-1>", lambda e: self._on_reject())
 
-        # دکمه یاد بگیر
         learn_btn = tk.Label(
             btn_frame, text="📚 یاد بگیر", font=btn_font,
             bg=BTN_LEARN, fg="white", padx=12, pady=5, cursor="hand2"
@@ -130,8 +124,9 @@ class PopupBubble:
         if self._is_visible:
             self.close()
 
-        self.current_original = original
-        self.current_suggested = suggested
+        with self._lock:
+            self.current_original = original
+            self.current_suggested = suggested
 
         def run():
             self._is_visible = True
@@ -142,7 +137,10 @@ class PopupBubble:
                 self._close_timer.daemon = True
                 self._close_timer.start()
 
-            self.root.mainloop()
+            try:
+                self.root.mainloop()
+            except Exception:
+                pass
             self._is_visible = False
 
         thread = threading.Thread(target=run, daemon=True)
@@ -160,13 +158,14 @@ class PopupBubble:
         """کاربر روی 'جایگزین' کلیک کرد."""
         if self._close_timer:
             self._close_timer.cancel()
-        # اول ببند
+        with self._lock:
+            orig = self.current_original
+            sugg = self.current_suggested
         self._close()
-        # بعد callback رو توی ترد جدا صدا بزن
         if self.on_accept:
             threading.Thread(
                 target=self.on_accept,
-                args=(self.current_original, self.current_suggested),
+                args=(orig, sugg),
                 daemon=True
             ).start()
 
@@ -174,11 +173,14 @@ class PopupBubble:
         """کاربر روی 'رد' کلیک کرد."""
         if self._close_timer:
             self._close_timer.cancel()
+        with self._lock:
+            orig = self.current_original
+            sugg = self.current_suggested
         self._close()
         if self.on_reject:
             threading.Thread(
                 target=self.on_reject,
-                args=(self.current_original, self.current_suggested),
+                args=(orig, sugg),
                 daemon=True
             ).start()
 
@@ -186,11 +188,13 @@ class PopupBubble:
         """کاربر روی 'یاد بگیر' کلیک کرد."""
         if self._close_timer:
             self._close_timer.cancel()
+        with self._lock:
+            sugg = self.current_suggested
         self._close()
         if self.on_learn:
             threading.Thread(
                 target=self.on_learn,
-                args=(self.current_suggested,),
+                args=(sugg,),
                 daemon=True
             ).start()
 
@@ -236,7 +240,7 @@ if __name__ == "__main__":
     )
 
     play_ding()
-    bubble.show("sghl", "سلام", timeout=5)
+    bubble.show("sghl phgj ]x,vi", "سلام حالت چطوره", timeout=5)
 
     import time
     time.sleep(6)
