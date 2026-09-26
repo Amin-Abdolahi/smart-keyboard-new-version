@@ -36,7 +36,7 @@ DEFAULT_CONFIG = {
         "pause_seconds": 1.0,
         "cooldown_seconds": 2.0,
         "auto_replace": True,
-        "auto_switch_layout": False,
+        "auto_switch_layout": True,
     },
     "ui": {
         "bubble_enabled": True,

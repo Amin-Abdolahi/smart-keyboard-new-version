@@ -1,32 +1,55 @@
-﻿# Python
+﻿# --- Python ---
 __pycache__/
 *.py[cod]
-*.class
+*$py.class
 *.so
 .Python
 build/
 dist/
 *.egg-info/
+*.egg
+.eggs/
+
+# --- Virtual environments ---
 .venv/
 venv/
 env/
+ENV/
+.python-version
 
-# PyInstaller
+# --- PyInstaller ---
 *.spec
 build/
 dist/
 
-# IDE
+# --- IDE ---
 .vscode/
 .idea/
 *.swp
+*.swo
 
-# User data (شخصی)
+# --- User data (شخصی) ---
 user_data/
+*.json
+!requirements*.json
 
-# OS
+# --- OS ---
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Logs
+# --- Logs ---
 *.log
+logs/
+
+# --- Testing ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- Build artifacts ---
+*.exe
+*.msi
+*.dmg
+*.AppImage
