@@ -16,7 +16,7 @@ class DetectionResult:
     """نتیجه تشخیص."""
 
     def __init__(self, action, original, suggested, confidence, from_lang, to_lang):
-        self.action = action          # 'auto' | 'suggest' | 'keep'
+        self.action = action
         self.original = original
         self.suggested = suggested
         self.confidence = confidence
@@ -31,6 +31,28 @@ class DetectionResult:
         )
 
 
+def _char_ratio(text, lang):
+    """
+    نسبت حروف معتبر یه زبان به کل حروف.
+    """
+    if not text:
+        return 0.0
+
+    if lang == "fa":
+        valid = sum(1 for c in text if '\u0600' <= c <= '\u06FF')
+        total = sum(1 for c in text if c.isalpha() or '\u0600' <= c <= '\u06FF')
+    elif lang == "en":
+        valid = sum(1 for c in text if c.isascii() and c.isalpha())
+        total = sum(1 for c in text if c.isalpha())
+    else:
+        valid = 0
+        total = 0
+
+    if total == 0:
+        return 0.0
+    return valid / total
+
+
 def _count_known_words(text, dictionary, lang):
     """شمارش کلمات شناخته‌شده توی یه متن."""
     if not text:
@@ -43,7 +65,6 @@ def _count_known_words(text, dictionary, lang):
     known = 0
     total = 0
     for w in words:
-        # حذف علائم نگارشی از ابتدا و انتهای کلمه
         clean = w.strip('.,!?;:؟،!؛')
         if len(clean) < MIN_WORD_LENGTH:
             continue
@@ -52,11 +73,10 @@ def _count_known_words(text, dictionary, lang):
             if dictionary.is_persian_word(clean):
                 known += 1
         elif lang == "en":
-            if dictionary.is_english_word(clean):
+            if dictionary.is_english_word(clean.lower()):
                 known += 1
         elif lang == "de":
-            # فعلاً آلمانی رو ساده بگیر
-            if dictionary.is_english_word(clean):
+            if dictionary.is_english_word(clean.lower()):
                 known += 1
 
     return known, total
@@ -65,47 +85,40 @@ def _count_known_words(text, dictionary, lang):
 def _score_conversion(original, converted, dictionary, from_lang, to_lang):
     """
     امتیازدهی به یه تبدیل.
-    برمی‌گردونه: (اطمینان، توضیح)
+    ترکیبی از امتیاز کلمه‌ای و امتیاز حرفی.
     """
-    # کلمات شناخته‌شده توی متن اصلی
+    # کلمات شناخته‌شده
     orig_known, orig_total = _count_known_words(original, dictionary, from_lang)
-
-    # کلمات شناخته‌شده توی متن تبدیل‌شده
     conv_known, conv_total = _count_known_words(converted, dictionary, to_lang)
 
-    if conv_total == 0:
-        return 0.0, "متن تبدیل‌شده کلمه معتبری نداره"
+    # نسبت حروف
+    orig_char_ratio = _char_ratio(original, from_lang)
+    conv_char_ratio = _char_ratio(converted, to_lang)
 
-    # نسبت کلمات معنی‌دار
-    orig_ratio = orig_known / orig_total if orig_total > 0 else 0.0
-    conv_ratio = conv_known / conv_total if conv_total > 0 else 0.0
+    # امتیاز کلمه‌ای (چقدر کلمات معنی‌دارن)
+    orig_word_score = orig_known / orig_total if orig_total > 0 else 0.0
+    conv_word_score = conv_known / conv_total if conv_total > 0 else 0.0
 
-    # اطمینان: چقدر متن تبدیل‌شده بهتر از متن اصلیه
-    if conv_ratio > orig_ratio:
-        confidence = conv_ratio - (orig_ratio * 0.5)
+    # امتیاز نهایی: ترکیب کلمه‌ای (70%) و حرفی (30%)
+    orig_score = (orig_word_score * 0.7) + (orig_char_ratio * 0.3)
+    conv_score = (conv_word_score * 0.7) + (conv_char_ratio * 0.3)
+
+    # اطمینان
+    if conv_score > orig_score:
+        confidence = conv_score - (orig_score * 0.5)
     else:
         confidence = 0.0
 
     # اگه متن اصلی کاملاً معنی‌داره، تبدیل نکن
-    if orig_ratio >= 0.8:
+    if orig_score >= 0.8:
         confidence = 0.0
 
-    return min(confidence, 1.0), f"orig={orig_known}/{orig_total}, conv={conv_known}/{conv_total}"
+    reason = f"orig_word={orig_known}/{orig_total}, conv_word={conv_known}/{conv_total}, orig_char={orig_char_ratio:.2f}, conv_char={conv_char_ratio:.2f}"
+    return min(confidence, 1.0), reason
 
 
 def detect(text, current_lang, active_langs, dictionary=None):
-    """
-    تشخیص نیاز به تبدیل برای یه متن.
-
-    Args:
-        text: متن تایپ‌شده
-        current_lang: زبان layout فعلی
-        active_langs: لیست زبان‌های فعال
-        dictionary: نمونه دیکشنری (اگه None، از singleton استفاده میشه)
-
-    Returns:
-        DetectionResult
-    """
+    """تشخیص نیاز به تبدیل برای یه متن."""
     if dictionary is None:
         dictionary = get_dictionary()
 
@@ -113,16 +126,13 @@ def detect(text, current_lang, active_langs, dictionary=None):
     if not text:
         return DetectionResult('keep', text, text, 0.0, current_lang, current_lang)
 
-    # اگه متن توی whitelist یا ignored هست، هیچ کاری نکن
     if dictionary.is_ignored(text) or dictionary.is_whitelisted(text):
         return DetectionResult('keep', text, text, 0.0, current_lang, current_lang)
 
-    # تولید تبدیل‌های ممکن
     candidates = get_conversion_candidates(text, current_lang, active_langs)
     if not candidates:
         return DetectionResult('keep', text, text, 0.0, current_lang, current_lang)
 
-    # امتیازدهی به هر تبدیل
     best = None
     best_confidence = 0.0
     best_reason = ""
@@ -139,7 +149,6 @@ def detect(text, current_lang, active_langs, dictionary=None):
     if best is None or best_confidence < SUGGEST_THRESHOLD:
         return DetectionResult('keep', text, text, best_confidence, current_lang, current_lang)
 
-    # تعیین action
     if best_confidence >= AUTO_CONVERT_THRESHOLD:
         action = 'auto'
     else:
@@ -156,10 +165,7 @@ def detect(text, current_lang, active_langs, dictionary=None):
 
 
 def detect_word_by_word(text, current_lang, active_langs, dictionary=None):
-    """
-    تشخیص کلمه به کلمه (برای متن‌های طولانی).
-    برمی‌گردونه لیست DetectionResult.
-    """
+    """تشخیص کلمه به کلمه (برای متن‌های طولانی)."""
     if dictionary is None:
         dictionary = get_dictionary()
 
@@ -178,32 +184,16 @@ def detect_word_by_word(text, current_lang, active_langs, dictionary=None):
 if __name__ == "__main__":
     print("=== تست detector ===\n")
 
-    # تست ۱: sghl با layout انگلیسی
-    print("1. 'sghl' با layout=en:")
-    r = detect('sghl', 'en', ['fa', 'en'])
-    print(f"   {r}\n")
+    tests = [
+        ('sghl', 'en', ['fa', 'en']),
+        ('hello', 'en', ['fa', 'en']),
+        ('سلام', 'fa', ['fa', 'en']),
+        ('sghl phgj ]x,vi', 'en', ['fa', 'en']),
+        ('asdfgh', 'en', ['fa', 'en']),
+        ('AI', 'fa', ['fa', 'en']),
+    ]
 
-    # تست ۲: hello با layout انگلیسی (نباید تبدیل بشه)
-    print("2. 'hello' با layout=en:")
-    r = detect('hello', 'en', ['fa', 'en'])
-    print(f"   {r}\n")
-
-    # تست ۳: سلام با layout فارسی (نباید تبدیل بشه)
-    print("3. 'سلام' با layout=fa:")
-    r = detect('سلام', 'fa', ['fa', 'en'])
-    print(f"   {r}\n")
-
-    # تست ۴: جمله کامل
-    print("4. 'sghl ,hkd' با layout=en:")
-    r = detect('sghl ,hkd', 'en', ['fa', 'en'])
-    print(f"   {r}\n")
-
-    # تست ۵: متن بی‌معنی
-    print("5. 'asdfgh' با layout=en:")
-    r = detect('asdfgh', 'en', ['fa', 'en'])
-    print(f"   {r}\n")
-
-    # تست ۶: AI (whitelist)
-    print("6. 'AI' با layout=fa:")
-    r = detect('AI', 'fa', ['fa', 'en'])
-    print(f"   {r}\n")
+    for text, lang, langs in tests:
+        r = detect(text, lang, langs)
+        print(f"'{text}' (layout={lang}):")
+        print(f"   {r}\n")

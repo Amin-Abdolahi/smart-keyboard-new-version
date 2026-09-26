@@ -34,13 +34,18 @@ if platform.system() == "Windows":
 # --- نقشه scan code به حرف انگلیسی ---
 SCANCODE_TO_CHAR = {
     16: 'q', 17: 'w', 18: 'e', 19: 'r', 20: 't', 21: 'y', 22: 'u', 23: 'i', 24: 'o', 25: 'p',
-    26: '[', 27: ']', 43: '\\',
     30: 'a', 31: 's', 32: 'd', 33: 'f', 34: 'g', 35: 'h', 36: 'j', 37: 'k', 38: 'l',
-    39: ';', 40: "'",
     44: 'z', 45: 'x', 46: 'c', 47: 'v', 48: 'b', 49: 'n', 50: 'm',
-    51: ',', 52: '.', 53: '/',
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
+}
+
+# --- نقشه scan code علائم نگارشی ---
+SCANCODE_PUNCTUATION = {
+    26: '[', 27: ']', 43: '\\',
+    39: ';', 40: "'",
+    51: ',', 52: '.', 53: '/',
     12: '-', 13: '=',
+    41: '`',
 }
 
 
@@ -111,9 +116,21 @@ class SmartKeyboardApp:
             name = event.name
             scan = event.scan_code
 
+            # --- کلید میانبر دستی: Ctrl+Shift+F ---
+            if name == 'f' and self._is_hotkey_pressed():
+                self._force_convert_buffer()
+                return
+
             # حروف و اعداد
             if scan in SCANCODE_TO_CHAR:
                 char = SCANCODE_TO_CHAR[scan]
+                with self._lock:
+                    self._input_buffer += char
+                self._reset_pause_timer()
+
+            # علائم نگارشی
+            elif scan in SCANCODE_PUNCTUATION:
+                char = SCANCODE_PUNCTUATION[scan]
                 with self._lock:
                     self._input_buffer += char
                 self._reset_pause_timer()
@@ -129,6 +146,7 @@ class SmartKeyboardApp:
                 with self._lock:
                     if self._input_buffer:
                         self._input_buffer = self._input_buffer[:-1]
+                self._reset_pause_timer()
 
             # enter و tab → بررسی فوری
             elif name in ('enter', 'tab'):
@@ -148,9 +166,10 @@ class SmartKeyboardApp:
     def _process_buffer(self):
         """بررسی متن جمع‌شده و تبدیل در صورت نیاز."""
         with self._lock:
-            text = self._input_buffer.strip()
+            raw = self._input_buffer
             self._input_buffer = ""
 
+        text = raw.strip()
         if not text:
             return
 
@@ -168,26 +187,29 @@ class SmartKeyboardApp:
         print(f"[Detect] {result}")
 
         if result.action == 'auto' and self.auto_replace:
-            # تبدیل خودکار
-            self._do_replace(result.original, result.suggested)
+            # متن توی صفحه = raw (با space و علائم)
+            self._do_replace(raw, result.suggested)
             self.learner.on_accept(result.original, result.suggested,
                                    result.from_lang, result.to_lang, result.confidence)
             self._last_conversion_time = now
             self.tray.set_status("فعال", COLOR_ACTIVE)
 
         elif result.action == 'suggest':
-            # نمایش حباب
             if self.sound_enabled:
                 play_ding()
             self.tray.set_status("پیشنهاد", COLOR_SUGGEST)
-            self.popup.show(result.original, result.suggested,
+            self.popup.show(raw, result.suggested,
                             timeout=self.config.get("ui", "bubble_timeout", default=10))
 
     def _do_replace(self, old_text, new_text):
         """جایگزینی متن تایپ‌شده با متن جدید."""
         try:
             import keyboard as kb
-            for _ in range(len(old_text)):
+            # تعداد کاراکترهای توی صفحه
+            backspace_count = len(old_text)
+            # اگه آخرین کاراکتر space نبود، یه space اضافه کن
+            # (چون معمولاً بعد از تایپ یه کلمه، space زده میشه)
+            for _ in range(backspace_count):
                 kb.send('backspace')
                 time.sleep(0.005)
             kb.write(new_text, delay=0.005)
@@ -245,6 +267,35 @@ class SmartKeyboardApp:
         if self._pause_timer:
             self._pause_timer.cancel()
         print("[Main] نظارت متوقف شد.")
+
+    # --- کلید میانبر دستی ---
+
+    def _is_hotkey_pressed(self):
+        """چک کن آیا Ctrl+Shift+F فشرده شده."""
+        try:
+            import keyboard as kb
+            return kb.is_pressed('ctrl') and kb.is_pressed('shift')
+        except Exception:
+            return False
+
+    def _force_convert_buffer(self):
+        """تبدیل اجباری متن تایپ‌شده (بدون تشخیص خودکار)."""
+        with self._lock:
+            raw = self._input_buffer
+            self._input_buffer = ""
+
+        text = raw.strip()
+        if not text:
+            return
+
+        current_lang = get_current_layout()
+        for target in self.active_langs:
+            if target != current_lang:
+                converted = convert_text(text, current_lang, target)
+                if converted != text:
+                    print(f"[Force Convert] '{text}' -> '{converted}'")
+                    self._do_replace(raw, converted)
+                    return
 
     # --- اجرا ---
 
