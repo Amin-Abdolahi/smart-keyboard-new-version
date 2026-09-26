@@ -48,6 +48,9 @@ SCANCODE_PUNCTUATION = {
     41: '`',
 }
 
+# زمان انتظار برای یادگیری پس‌زمینه (ثانیه)
+BACKGROUND_LEARN_DELAY = 5.0
+
 
 def get_current_layout():
     """تشخیص layout فعال پنجره جاری."""
@@ -83,6 +86,12 @@ class SmartKeyboardApp:
         self._pause_timer = None
         self._lock = threading.Lock()
         self._last_conversion_time = 0
+
+        # --- برای یادگیری پس‌زمینه ---
+        self._pending_learn_text = ""       # متنی که ممکنه یاد گرفته بشه
+        self._pending_learn_lang = "en"     # زبان متن
+        self._pending_learn_timer = None    # تایمر یادگیری
+        self._last_hwnd = None              # هندل پنجره قبلی
 
         # حباب شناور
         self.popup = PopupBubble(
@@ -120,6 +129,9 @@ class SmartKeyboardApp:
             if name == 'f' and self._is_hotkey_pressed():
                 self._force_convert_buffer()
                 return
+
+            # هر کلیدی که زده شد، تایمر یادگیری رو کنسل کن
+            self._cancel_pending_learn()
 
             # حروف و اعداد
             if scan in SCANCODE_TO_CHAR:
@@ -182,11 +194,15 @@ class SmartKeyboardApp:
         result = detect(text, current_lang, self.active_langs, self.dictionary)
 
         if result.action == 'keep':
+            # متن معنی‌داره یا whitelist هست → برای یادگیری پس‌زمینه ذخیره کن
+            self._schedule_pending_learn(text, current_lang)
             return
 
         print(f"[Detect] {result}")
 
         if result.action == 'auto' and self.auto_replace:
+            # ذخیره هندل پنجره فعلی
+            self._save_foreground_window()
             # متن توی صفحه = raw (با space و علائم)
             self._do_replace(raw, result.suggested)
             self.learner.on_accept(result.original, result.suggested,
@@ -195,20 +211,87 @@ class SmartKeyboardApp:
             self.tray.set_status("فعال", COLOR_ACTIVE)
 
         elif result.action == 'suggest':
+            # ذخیره هندل پنجره فعلی
+            self._save_foreground_window()
             if self.sound_enabled:
                 play_ding()
             self.tray.set_status("پیشنهاد", COLOR_SUGGEST)
             self.popup.show(raw, result.suggested,
                             timeout=self.config.get("ui", "bubble_timeout", default=10))
 
+    # --- یادگیری پس‌زمینه ---
+
+    def _schedule_pending_learn(self, text, lang):
+        """
+        برنامه‌ریزی برای یادگیری متن بعد از چند ثانیه.
+        اگه کاربر متن رو تغییر نده یا backspace نزنه، متن یاد گرفته میشه.
+        """
+        if not self.config.get("learning", "enabled", default=True):
+            return
+        if len(text) < 3:
+            return
+
+        self._pending_learn_text = text
+        self._pending_learn_lang = lang
+
+        # کنسل تایمر قبلی
+        if self._pending_learn_timer:
+            self._pending_learn_timer.cancel()
+
+        # تایمر جدید
+        self._pending_learn_timer = threading.Timer(
+            BACKGROUND_LEARN_DELAY, self._do_pending_learn
+        )
+        self._pending_learn_timer.daemon = True
+        self._pending_learn_timer.start()
+
+    def _cancel_pending_learn(self):
+        """کنسل کردن یادگیری پس‌زمینه (وقتی کاربر داره تایپ میکنه)."""
+        if self._pending_learn_timer:
+            self._pending_learn_timer.cancel()
+            self._pending_learn_timer = None
+
+    def _do_pending_learn(self):
+        """یادگیری واقعی متن بعد از تاخیر."""
+        text = self._pending_learn_text
+        lang = self._pending_learn_lang
+        self._pending_learn_text = ""
+
+        if not text:
+            return
+
+        # اضافه کردن کلمات به لیست کاربر
+        count = self.dictionary.add_sentence_words(text, lang=lang)
+        if count > 0:
+            print(f"[Learn] {count} کلمه از '{text[:50]}...' یاد گرفته شد.")
+
+    # --- ذخیره/بازیابی پنجره ---
+
+    def _save_foreground_window(self):
+        """ذخیره هندل پنجره فعال."""
+        if not PYWIN_AVAILABLE:
+            return
+        try:
+            self._last_hwnd = win32gui.GetForegroundWindow()
+        except Exception:
+            self._last_hwnd = None
+
+    def _restore_foreground_window(self):
+        """برگرداندن focus به پنجره قبلی."""
+        if not PYWIN_AVAILABLE or not self._last_hwnd:
+            return
+        try:
+            win32gui.SetForegroundWindow(self._last_hwnd)
+        except Exception:
+            pass
+
+    # --- جایگزینی متن ---
+
     def _do_replace(self, old_text, new_text):
         """جایگزینی متن تایپ‌شده با متن جدید."""
         try:
             import keyboard as kb
-            # تعداد کاراکترهای توی صفحه
             backspace_count = len(old_text)
-            # اگه آخرین کاراکتر space نبود، یه space اضافه کن
-            # (چون معمولاً بعد از تایپ یه کلمه، space زده میشه)
             for _ in range(backspace_count):
                 kb.send('backspace')
                 time.sleep(0.005)
@@ -221,6 +304,14 @@ class SmartKeyboardApp:
     def _on_popup_accept(self, original, suggested):
         """کاربر پیشنهاد رو قبول کرد."""
         print(f"[Popup] قبول: '{original}' -> '{suggested}'")
+
+        # صبر کن پاپ‌آپ بسته بشه
+        time.sleep(0.3)
+
+        # برگرداندن focus به پنجره قبلی
+        self._restore_foreground_window()
+        time.sleep(0.1)
+
         self._do_replace(original, suggested)
         self.learner.on_accept(original, suggested, "", "", 1.0)
         self._last_conversion_time = time.time()
@@ -236,6 +327,8 @@ class SmartKeyboardApp:
         """کاربر کلمه رو یاد داد."""
         print(f"[Popup] یاد بگیر: '{word}'")
         self.learner.on_learn(word)
+        # همچنین کلمات جمله رو هم اضافه کن
+        self.dictionary.add_sentence_words(word, lang="fa")
         self.tray.set_status("فعال", COLOR_ACTIVE)
 
     # --- شروع/توقف ---
@@ -266,6 +359,8 @@ class SmartKeyboardApp:
         self.is_monitoring = False
         if self._pause_timer:
             self._pause_timer.cancel()
+        if self._pending_learn_timer:
+            self._pending_learn_timer.cancel()
         print("[Main] نظارت متوقف شد.")
 
     # --- کلید میانبر دستی ---
@@ -294,6 +389,7 @@ class SmartKeyboardApp:
                 converted = convert_text(text, current_lang, target)
                 if converted != text:
                     print(f"[Force Convert] '{text}' -> '{converted}'")
+                    self._save_foreground_window()
                     self._do_replace(raw, converted)
                     return
 

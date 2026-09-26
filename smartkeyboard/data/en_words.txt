@@ -308,3 +308,11 @@ saturn
 uranus
 neptune
 pluto
+situation
+condition
+state
+status
+fine
+ok
+okay
+good

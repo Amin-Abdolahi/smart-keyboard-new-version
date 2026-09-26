@@ -38,8 +38,8 @@ class PopupBubble:
         """ساخت پنجره Tkinter."""
         self.root = tk.Tk()
         self.root.title("Smart Keyboard")
-        self.root.overrideredirect(True)  # بدون title bar
-        self.root.attributes("-topmost", True)  # همیشه بالا
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
         self.root.configure(bg=BG_COLOR)
 
         # موقعیت: گوشه پایین راست صفحه
@@ -126,11 +126,7 @@ class PopupBubble:
         self.root.bind("<Escape>", lambda e: self._on_reject())
 
     def show(self, original, suggested, timeout=10):
-        """
-        نمایش حباب.
-        این متد از هر تردی قابل صدا زدنه، ولی خودش ترد جدید می‌سازه.
-        """
-        # اگه قبلاً بازه، ببندش
+        """نمایش حباب."""
         if self._is_visible:
             self.close()
 
@@ -141,7 +137,6 @@ class PopupBubble:
             self._is_visible = True
             self._create_window(original, suggested)
 
-            # تایمر بستن خودکار
             if timeout > 0:
                 self._close_timer = threading.Timer(timeout, self._auto_close)
                 self._close_timer.daemon = True
@@ -162,25 +157,42 @@ class PopupBubble:
             pass
 
     def _on_accept(self):
+        """کاربر روی 'جایگزین' کلیک کرد."""
         if self._close_timer:
             self._close_timer.cancel()
-        if self.on_accept:
-            self.on_accept(self.current_original, self.current_suggested)
+        # اول ببند
         self._close()
+        # بعد callback رو توی ترد جدا صدا بزن
+        if self.on_accept:
+            threading.Thread(
+                target=self.on_accept,
+                args=(self.current_original, self.current_suggested),
+                daemon=True
+            ).start()
 
     def _on_reject(self):
+        """کاربر روی 'رد' کلیک کرد."""
         if self._close_timer:
             self._close_timer.cancel()
-        if self.on_reject:
-            self.on_reject(self.current_original, self.current_suggested)
         self._close()
+        if self.on_reject:
+            threading.Thread(
+                target=self.on_reject,
+                args=(self.current_original, self.current_suggested),
+                daemon=True
+            ).start()
 
     def _on_learn(self):
+        """کاربر روی 'یاد بگیر' کلیک کرد."""
         if self._close_timer:
             self._close_timer.cancel()
-        if self.on_learn:
-            self.on_learn(self.current_suggested)
         self._close()
+        if self.on_learn:
+            threading.Thread(
+                target=self.on_learn,
+                args=(self.current_suggested,),
+                daemon=True
+            ).start()
 
     def _close(self):
         try:
@@ -226,7 +238,6 @@ if __name__ == "__main__":
     play_ding()
     bubble.show("sghl", "سلام", timeout=5)
 
-    # صبر کن تا حباب بسته بشه
     import time
     time.sleep(6)
     print("پایان تست.")

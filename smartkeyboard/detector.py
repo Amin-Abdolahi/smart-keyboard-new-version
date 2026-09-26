@@ -1,5 +1,5 @@
 # smartkeyboard/detector.py
-# تشخیص نیاز به تبدیل layout
+# تشخیص نیاز به تبدیل layout - با الگوی آماری
 
 from .converter import convert_text, get_conversion_candidates
 from .dictionary import get_dictionary
@@ -7,9 +7,30 @@ from .languages import get_language_info
 
 
 # --- آستانه‌ها ---
-AUTO_CONVERT_THRESHOLD = 0.8
-SUGGEST_THRESHOLD = 0.4
+AUTO_CONVERT_THRESHOLD = 0.75
+SUGGEST_THRESHOLD = 0.40
 MIN_WORD_LENGTH = 2
+
+
+# --- حروف پرکاربرد فارسی (بر اساس فراوانی) ---
+FA_COMMON_CHARS = set("ایردنتسهبمفکعلحوقپجشخزضغذثقظط")
+
+# --- حروف پرکاربرد انگلیسی ---
+EN_COMMON_CHARS = set("etaoinshrdlucmfwypvbgkjqxz")
+
+# --- بی‌گرام‌های رایج فارسی ---
+FA_BIGRAMS = {
+    "ان", "را", "ها", "یه", "می", "ای", "او", "یی", "ست", "که",
+    "از", "با", "در", "بر", "تا", "هم", "یا", "ما", "تو", "شو",
+    "ین", "ون", "ار", "ور", "رد", "دی", "با", "به", "بی", "پی",
+}
+
+# --- بی‌گرام‌های رایج انگلیسی ---
+EN_BIGRAMS = {
+    "th", "he", "in", "er", "an", "re", "on", "at", "en", "nd",
+    "ti", "es", "or", "te", "of", "ed", "is", "it", "al", "ar",
+    "st", "to", "nt", "ng", "se", "ha", "as", "ou", "io", "le",
+}
 
 
 class DetectionResult:
@@ -32,9 +53,7 @@ class DetectionResult:
 
 
 def _char_ratio(text, lang):
-    """
-    نسبت حروف معتبر یه زبان به کل حروف.
-    """
+    """نسبت حروف معتبر یه زبان به کل حروف."""
     if not text:
         return 0.0
 
@@ -51,6 +70,43 @@ def _char_ratio(text, lang):
     if total == 0:
         return 0.0
     return valid / total
+
+
+def _statistical_score(text, lang):
+    """
+    امتیاز آماری بر اساس فراوانی حروف و بی‌گرام‌ها.
+    """
+    if not text:
+        return 0.0
+
+    if lang == "fa":
+        chars = [c for c in text if '\u0600' <= c <= '\u06FF']
+        common_chars = FA_COMMON_CHARS
+        bigrams = FA_BIGRAMS
+    elif lang == "en":
+        chars = [c.lower() for c in text if c.isascii() and c.isalpha()]
+        common_chars = EN_COMMON_CHARS
+        bigrams = EN_BIGRAMS
+    else:
+        return 0.0
+
+    if not chars:
+        return 0.0
+
+    # امتیاز فراوانی حروف
+    char_score = sum(1 for c in chars if c in common_chars) / len(chars)
+
+    # امتیاز بی‌گرام
+    text_lower = ''.join(chars)
+    bigram_count = 0
+    total_bigrams = max(len(text_lower) - 1, 1)
+    for i in range(len(text_lower) - 1):
+        if text_lower[i:i+2] in bigrams:
+            bigram_count += 1
+    bigram_score = bigram_count / total_bigrams
+
+    # ترکیب: ۵۰٪ حروف + ۵۰٪ بی‌گرام
+    return (char_score * 0.5) + (bigram_score * 0.5)
 
 
 def _count_known_words(text, dictionary, lang):
@@ -85,7 +141,10 @@ def _count_known_words(text, dictionary, lang):
 def _score_conversion(original, converted, dictionary, from_lang, to_lang):
     """
     امتیازدهی به یه تبدیل.
-    ترکیبی از امتیاز کلمه‌ای و امتیاز حرفی.
+    ترکیبی از:
+      - امتیاز کلمه‌ای (۴۰٪)
+      - امتیاز حرفی (۳۰٪)
+      - امتیاز آماری (۳۰٪)
     """
     # کلمات شناخته‌شده
     orig_known, orig_total = _count_known_words(original, dictionary, from_lang)
@@ -95,13 +154,25 @@ def _score_conversion(original, converted, dictionary, from_lang, to_lang):
     orig_char_ratio = _char_ratio(original, from_lang)
     conv_char_ratio = _char_ratio(converted, to_lang)
 
-    # امتیاز کلمه‌ای (چقدر کلمات معنی‌دارن)
+    # امتیاز آماری
+    orig_stat = _statistical_score(original, from_lang)
+    conv_stat = _statistical_score(converted, to_lang)
+
+    # امتیاز کلمه‌ای
     orig_word_score = orig_known / orig_total if orig_total > 0 else 0.0
     conv_word_score = conv_known / conv_total if conv_total > 0 else 0.0
 
-    # امتیاز نهایی: ترکیب کلمه‌ای (70%) و حرفی (30%)
-    orig_score = (orig_word_score * 0.7) + (orig_char_ratio * 0.3)
-    conv_score = (conv_word_score * 0.7) + (conv_char_ratio * 0.3)
+    # ترکیب نهایی
+    orig_score = (
+        (orig_word_score * 0.4)
+        + (orig_char_ratio * 0.3)
+        + (orig_stat * 0.3)
+    )
+    conv_score = (
+        (conv_word_score * 0.4)
+        + (conv_char_ratio * 0.3)
+        + (conv_stat * 0.3)
+    )
 
     # اطمینان
     if conv_score > orig_score:
@@ -110,10 +181,13 @@ def _score_conversion(original, converted, dictionary, from_lang, to_lang):
         confidence = 0.0
 
     # اگه متن اصلی کاملاً معنی‌داره، تبدیل نکن
-    if orig_score >= 0.8:
+    if orig_score >= 0.80:
         confidence = 0.0
 
-    reason = f"orig_word={orig_known}/{orig_total}, conv_word={conv_known}/{conv_total}, orig_char={orig_char_ratio:.2f}, conv_char={conv_char_ratio:.2f}"
+    reason = (
+        f"orig_word={orig_known}/{orig_total}, conv_word={conv_known}/{conv_total}, "
+        f"orig_stat={orig_stat:.2f}, conv_stat={conv_stat:.2f}"
+    )
     return min(confidence, 1.0), reason
 
 
@@ -189,8 +263,10 @@ if __name__ == "__main__":
         ('hello', 'en', ['fa', 'en']),
         ('سلام', 'fa', ['fa', 'en']),
         ('sghl phgj ]x,vi', 'en', ['fa', 'en']),
+        ('h,qhu vndti', 'en', ['fa', 'en']),
         ('asdfgh', 'en', ['fa', 'en']),
         ('AI', 'fa', ['fa', 'en']),
+        ('man', 'en', ['fa', 'en']),
     ]
 
     for text, lang, langs in tests:
