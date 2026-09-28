@@ -65,6 +65,7 @@ class TrayIcon:
             MenuItem('آمار', self._on_stats),
             Menu.SEPARATOR,
             MenuItem('خروج', self._on_exit),
+            MenuItem('مشاهده لاگ', self._on_view_log),
         )
 
     # --- Handlerها ---
@@ -150,9 +151,19 @@ class TrayIcon:
                 self.icon.stop()
             except Exception:
                 pass
+    def _on_view_log(self, icon=None, item=None):
+        # """باز کردن فایل لاگ."""
+        import subprocess
+        try:
+            from .logger import get_log_file_path
+            log_path = get_log_file_path()
+            subprocess.Popen(["notepad.exe", log_path])
+        except Exception as e:
+            print(f"[Tray] خطا در باز کردن لاگ: {e}")
 
 
 if __name__ == "__main__":
     print("تست tray...")
     tray = TrayIcon()
     tray.run()
+
